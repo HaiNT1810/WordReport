@@ -9,18 +9,17 @@ using Syncfusion.DocIO;
 using Syncfusion.DocIO.DLS;
 using System.Drawing;
 using System.Net;
-using OpenReport.WordCommon;
 
-namespace OpenReport
+namespace MSWordReport
 {
     public class Word
     {
         #region Contractor
         private string fileNameOutput;
-        private List<ITemplate> lstTemplate = new List<ITemplate>();
-        private List<ITable> lstTable = new List<ITable>();
-        private List<IRepeat> lstRepeat = new List<IRepeat>();
-        private List<ITag> lstTag = new List<ITag>();
+        private List<ITemplateWord> lstTemplate = new List<ITemplateWord>();
+        private List<ITableWord> lstTable = new List<ITableWord>();
+        private List<IRepeatWord> lstRepeat = new List<IRepeatWord>();
+        private List<ITagWord> lstTag = new List<ITagWord>();
         private int[] countRowTable;
         public WordDocument Document { get; set; }
         public HttpResponse Response { get; set; }
@@ -37,34 +36,37 @@ namespace OpenReport
         {
             Response = HttpContext.Current.Response;
             this.fileNameOutput = fileNameOutput;
-            MemoryStream stream = Common.GetFileStreamFromUrl(fileUrl);
-            Document = new WordDocument(stream, FormatType.Docx);
-
+            Document = new WordDocument(fileUrl, FormatType.Docx);
             Section = Document.LastSection;
             GetAllTemplate();
+            //Response = HttpContext.Current.Response;
+            //this.fileNameOutput = fileNameOutput;
+            //MemoryStream stream = GetFileStreamFromUrl(fileUrl);
+            //Document = new WordDocument(stream, FormatType.Docx);
+            //Section = Document.LastSection;
+            //GetAllTemplate();
+
         }
         #endregion
-
-        #region Publish Function
+        /// <summary>
+        /// replate data to template clone
+        /// </summary>
+        /// <param name="obj"></param>
+        /// 
+        #region Public Function
         public void SetRepeat(object obj)
         {
-            if (GetTableOfIT(obj, lstTemplate) != null)
-                lstRepeat.Add(GetTableOfIT(obj, lstTemplate));
+            IRepeatWord repeat = GetTableOfIT(obj, lstTemplate);
+            if (repeat != null)
+                lstRepeat.Add(repeat);
         }
         public void SetTag(string tagName, object obj)
         {
             if (tagName != "" && tagName != null)
             {
                 tagName = tagName.Trim();
-                if (tagName.IndexOf('{') == -1)
-                {
-                    tagName = "{" + tagName;
-                }
-                if (tagName.IndexOf('}') == -1)
-                {
-                    tagName = tagName + "}";
-                }
-                lstTag.Add(new ITag(tagName, obj, "Text"));
+                GetPropertyOfTag(tagName, obj);
+                //GetStype(tagName, obj, TagWordType.Text);
             }
         }
         public void SetTag(string tagName, object obj, TagWordType type = TagWordType.Text)
@@ -72,15 +74,8 @@ namespace OpenReport
             if (tagName != "" && tagName != null)
             {
                 tagName = tagName.Trim();
-                if (tagName.IndexOf('{') == -1)
-                {
-                    tagName = "{" + tagName;
-                }
-                if (tagName.IndexOf('}') == -1)
-                {
-                    tagName = tagName + "}";
-                }
-                lstTag.Add(new ITag(tagName, obj, type.ToString()));
+                GetPropertyOfTag(tagName, obj);
+                //GetStype(tagName, obj, type);
             }
         }
         public void DownloadReport(FormatType type = FormatType.Docx)
@@ -97,14 +92,14 @@ namespace OpenReport
                 Document.Save(fileNameOutput, type, Response, HttpContentDisposition.Attachment);
             }
         }
-        #endregion
 
+        #endregion
         #region Private Function
         private void SetRepeatValue()
         {
             if (lstRepeat.Count > 0)
             {
-                foreach (IRepeat iRepeat in lstRepeat)
+                foreach (IRepeatWord iRepeat in lstRepeat)
                 {
                     WTableRow r = Section.Tables[iRepeat.ITemp.IndexTable].Rows[iRepeat.ITemp.IndexRow].Clone();
                     Section.Tables[iRepeat.ITemp.IndexTable].Rows.Insert(countRowTable[iRepeat.ITemp.IndexTable], r);
@@ -114,8 +109,9 @@ namespace OpenReport
                     for (int i = 0, n = Section.Tables[iRepeat.ITemp.IndexTable].LastRow.Cells.Count; i < n; i++)
                     {
                         cell = Section.Tables[iRepeat.ITemp.IndexTable].LastRow.Cells[i];
-                        paragraph = ReplateTempInParagraph(cell.LastParagraph.Text, iRepeat);
-                        cell.LastParagraph.Text = paragraph;
+                        ReplateTempInCell(cell, iRepeat);
+                        //paragraph = ReplateTempInParagraph(cell.LastParagraph.Text, iRepeat);
+                        //cell.LastParagraph.Text = paragraph;
                     }
                 }
             }
@@ -124,30 +120,36 @@ namespace OpenReport
         {
             if (lstTag.Count > 0)
             {
-                foreach (ITag iTag in lstTag)
+                foreach (ITagWord iTag in lstTag)
                 {
-                    switch (iTag.TagType.ToLower())
+                    string tagName = Contains.START_TAG + iTag.TagName + Contains.END_TAG;
+                    switch (iTag.TagType)
                     {
-                        case "text":
-                            Document.Replace(iTag.TagName, iTag.Data.ToString(), false, false);
+                        case TagWordType.Text:
+                            Document.Replace(tagName, iTag.Data.ToString(), false, false);
                             break;
-                        case "image":
+                        case TagWordType.Image:
                             Image img = ConvertStrBase64ToImage(iTag.Data.ToString());
                             IWParagraph paragraph = Section.AddParagraph();
                             IWPicture picture = paragraph.AppendPicture(img);
-                            picture.Height = 100; picture.Width = 200;
+                            if (iTag.TagStyle != "")
+                            {
+                                string[] lstStyle = iTag.TagStyle.Split(';');
+                                for (int i = 0, n = lstStyle.Length; i < n; i++)
+                                    SetStyle(picture, lstStyle[i]);
+                            }
                             paragraph.ParagraphFormat.HorizontalAlignment = Syncfusion.DocIO.DLS.HorizontalAlignment.Center;
                             TextBodyPart textBodyPart = new TextBodyPart(Document);
                             textBodyPart.BodyItems.Add(paragraph);
-                            Document.Replace(iTag.TagName, textBodyPart, false, false);
+                            Document.Replace(tagName, textBodyPart, false, false);
                             break;
                         default:
                             break;
                     }
-
                 }
             }
         }
+
         /// <summary>
         /// Get all template in a table of form
         /// </summary>
@@ -157,17 +159,17 @@ namespace OpenReport
             for (int i = 0, n = Section.Tables.Count; i < n; i++)
             {
                 int indexRow = 0;
-                lstTable.Add(new ITable(i, Section.Tables[i].Rows.Count));
+                lstTable.Add(new ITableWord(i, Section.Tables[i].Rows.Count));
                 for (int j = 0, m = Section.Tables[i].Rows.Count; j < m; j++)
                 {
                     indexRow = j;
-                    List<ITempTag> tmpcell = new List<ITempTag>();
+                    List<ITempTagWord> tmpcell = new List<ITempTagWord>();
                     for (int k = 0, l = Section.Tables[i].Rows[j].Cells.Count; k < l; k++)
                     {
                         GetArrTemp(Section.Tables[i].Rows[j].Cells[k], tmpcell);
                     }
                     if (tmpcell.Count != 0)
-                        lstTemplate.Add(new ITemplate(i, indexRow, tmpcell));
+                        lstTemplate.Add(new ITemplateWord(i, indexRow, tmpcell));
                 }
                 CountRowTable.Add(Section.Tables[i].Rows.Count);
             }
@@ -179,51 +181,106 @@ namespace OpenReport
         /// <param name="cell"></param>
         /// <param name="tmpcell"></param>
         /// <returns></returns>
-        private List<ITempTag> GetArrTemp(WTableCell cell, List<ITempTag> tmpcell)
+        private List<ITempTagWord> GetArrTemp(WTableCell cell, List<ITempTagWord> tmpcell)
         {
-            string paragraph = cell.LastParagraph.Text;
-            if (paragraph.IndexOfAny(new char[] { '{', '}' }) != -1)
+            for (int i = 0, n = cell.Paragraphs.Count; i < n; i++)
             {
-                string[] lstTemp = paragraph.Split('{');
-                for (int i = 0, n = lstTemp.Length; i < n; i++)
+                string paragraph = cell.Paragraphs[i].Text;
+                if (paragraph.IndexOfAny(new char[] { '{', '}' }) != -1)
                 {
-                    if (lstTemp[i].IndexOf('}') != -1)
+                    string[] lstTemp = paragraph.Split('{');
+                    for (int j = 0, m = lstTemp.Length; j < m; j++)
                     {
-                        bool flag = false;
-                        string str = lstTemp[i].Split('}')[0];
-                        if (str != "" && str != null)
+                        if (lstTemp[j].IndexOf('}') != -1)
                         {
-                            if (str.IndexOf(":") == -1)
+                            bool flag = false;
+                            string str = lstTemp[j].Split('}')[0];
+                            if (str != "" && str != null)
                             {
-                                foreach (ITempTag itt in tmpcell)
+                                if (str.IndexOf(":") == -1)
                                 {
-                                    if (itt.TagName == str)
+                                    foreach (ITempTagWord itt in tmpcell)
                                     {
-                                        flag = true;
+                                        if (itt.TagName == str)
+                                        {
+                                            flag = true;
+                                        }
                                     }
+                                    if (!flag)
+                                        tmpcell.Add(new ITempTagWord(str, TagWordType.Text.ToString(), ""));
                                 }
-                                if (flag == false)
-                                    tmpcell.Add(new ITempTag(str, TagWordType.Text.ToString()));
-                            }
-                            else
-                            {
-                                string tagName = str.Split(':')[1];
-                                string tagType = str.Split(':')[0];
-                                foreach (ITempTag itt in tmpcell)
+                                else
                                 {
-                                    if (itt.TagName == tagName)
+                                    string[] arrProperties = str.Split(':');
+                                    string tagStyle = arrProperties[2] == null ? "" : arrProperties[2];
+                                    string tagName = arrProperties[1];
+                                    string tagType = arrProperties[0];
+                                    foreach (ITempTagWord itt in tmpcell)
                                     {
-                                        flag = true;
+                                        if (itt.TagName == tagName)
+                                        {
+                                            flag = true;
+                                        }
                                     }
+                                    if (!flag)
+                                        tmpcell.Add(new ITempTagWord(tagName, tagType, tagStyle));
+                                    paragraph = paragraph.Replace(str, tagName);
                                 }
-                                if (flag == false)
-                                    tmpcell.Add(new ITempTag(tagName, tagType));
                             }
+                        }
+                    }
+                    cell.Paragraphs[i].Text = paragraph;
+                }
+            }
+            return tmpcell;
+        }
+        /// <summary>
+        /// get style of a image tag
+        /// </summary>
+        /// <param name="obj"></param>
+        /// <returns></returns>
+        private void GetStype(string tagName, object obj, TagWordType type)
+        {
+            string str = obj.ToString();
+            if (str.IndexOf(':') == -1)
+                lstTag.Add(new ITagWord(tagName, obj, type, ""));
+            else
+            {
+                string[] lstStr = str.Split(':');
+                if (lstStr.Length == 2)
+                {
+                    lstTag.Add(new ITagWord(tagName, lstStr[0], type, lstStr[1]));
+                }
+            }
+        }
+        private void GetPropertyOfTag(string tagName, object obj)
+        {
+            string temp = Contains.START_TAG + TagWordType.Image.ToString() + Contains.GROUP_CHARACTER + tagName;
+            if (Document.Find(Contains.START_TAG + tagName + Contains.END_TAG, false, true) != null)
+                lstTag.Add(new ITagWord(tagName, obj, TagWordType.Text, ""));
+            if (Document.Find(Contains.START_TAG + TagWordType.Image.ToString() + tagName + Contains.END_TAG, false, true) != null)
+                lstTag.Add(new ITagWord(tagName, obj, TagWordType.Image, ""));
+            if (Document.Find(temp, false, true) != null)
+            {
+                //TextSelection textSelection = Document.Find(Contains.START_TAG + TagWordType.Image.ToString() + tagName + Contains.GROUP_CHARACTER, false, false);
+                string str = "";
+                for (int a = 0, b = Document.Sections.Count; a < b; a++)
+                {
+                    for (int i = 0, n = Document.Sections[a].Paragraphs.Count; i < n; i++)
+                    {
+                        if (Document.Sections[a].Paragraphs[i].Text.IndexOf(temp) != -1)
+                        {
+                            str += Document.Sections[a].Paragraphs[i].Text;
+                            int index = str.IndexOf(temp);
+                            int endTag = str.Substring(index + temp.Count()).IndexOf('}');
+                            string tag = str.Substring(index, endTag + index + temp.Count() + 1);
+                            string style = tag.Substring(temp.Count() + 1).Replace("}", string.Empty);
+                            Document.Replace(tag, Contains.START_TAG + tagName + Contains.END_TAG, false, false);
+                            lstTag.Add(new ITagWord(tagName, obj, TagWordType.Image, style));
                         }
                     }
                 }
             }
-            return tmpcell;
         }
         /// <summary>
         /// get template of a row in a table by Itemplate
@@ -231,7 +288,7 @@ namespace OpenReport
         /// <param name="obj"></param>
         /// <param name="Itemp"></param>
         /// <returns></returns>
-        private IRepeat GetTableOfIT(object obj, List<ITemplate> Itemp)
+        private IRepeatWord GetTableOfIT(object obj, List<ITemplateWord> Itemp)
         {
             PropertyInfo[] pptI;
             List<string> str = new List<string>();
@@ -241,7 +298,7 @@ namespace OpenReport
             {
                 str.Add(pptI[i].Name);
             }
-            foreach (ITemplate itemp in Itemp)
+            foreach (ITemplateWord itemp in Itemp)
             {
                 List<string> temp = new List<string>();
                 for (int j = 0, m = itemp.ITempTag.Count; j < m; j++)
@@ -249,9 +306,9 @@ namespace OpenReport
                     temp.Add(itemp.ITempTag[j].TagName);
                 }
                 bool flag = CompareArrays(str.ToArray(), temp.ToArray());
-                if (flag == true)
+                if (flag)
                 {
-                    return new IRepeat(itemp, obj);
+                    return new IRepeatWord(itemp, obj);
                 }
             }
             return null;
@@ -262,7 +319,6 @@ namespace OpenReport
             for (int i = 0; i < a.Length; i++)
             {
                 if (a[i] != b[i]) { return false; }
-
             }
             return true;
         }
@@ -272,11 +328,11 @@ namespace OpenReport
         /// <param name="paragraph"></param>
         /// <param name="obj"></param>
         /// <returns></returns>
-        private string ReplateTempInParagraph(string paragraph, IRepeat IRepeat)
+        private string ReplateTempInParagraph(string paragraph, IRepeatWord iRepeat)
         {
             PropertyInfo[] pptI;
             List<string> str = new List<string>();
-            pptI = IRepeat.Data.GetType().GetProperties();
+            pptI = iRepeat.Data.GetType().GetProperties();
             int length = pptI.Count();
             for (int i = 0; i < length; i++)
             {
@@ -287,22 +343,86 @@ namespace OpenReport
             {
                 if (paragraph.IndexOf(lst[i]) != -1)
                 {
-                    paragraph = paragraph.Replace(lst[i], pptI[i].GetValue(IRepeat.Data, null).ToString());
+
+                    paragraph = paragraph.Replace(lst[i], pptI[i].GetValue(iRepeat.Data, null).ToString());
                 }
             }
             return paragraph;
+        }
+        private void ReplateTempInCell(WTableCell cell, IRepeatWord iRepeat)
+        {
+            PropertyInfo[] pptI;
+            pptI = iRepeat.Data.GetType().GetProperties();
+            int length = pptI.Count();
+            for (int i = 0, n = cell.Paragraphs.Count; i < n; i++)
+            {
+                string paragraph = cell.Paragraphs[i].Text;
+                List<string> str = new List<string>();
+                for (int j = 0; j < length; j++)
+                {
+                    str.Add("{" + pptI[j].Name + "}");
+                }
+                string[] lst = str.ToArray();
+                for (int j = 0; j < lst.Length; j++)
+                {
+                    if (paragraph.IndexOf(lst[j]) != -1)
+                    {
+                        string tagType = "Text";
+                        string tagStyle = string.Empty;
+                        for (int k = 0, l = iRepeat.ITemp.ITempTag.Count; k < l; k++)
+                        {
+                            if (pptI[j].Name == iRepeat.ITemp.ITempTag[k].TagName)
+                            {
+                                tagType = iRepeat.ITemp.ITempTag[k].TagType;
+                                tagStyle = iRepeat.ITemp.ITempTag[k].TagStyle;
+                            }
+                        }
+                        if (tagType.ToLower() == TagWordType.Text.ToString().ToLower())
+                        {
+                            paragraph = paragraph.Replace(lst[j], pptI[j].GetValue(iRepeat.Data, null).ToString());
+                            cell.Paragraphs[i].Text = paragraph;
+                        }
+                        else
+                        {
+                            string strImg = pptI[j].GetValue(iRepeat.Data, null).ToString();
+                            string s = cell.Paragraphs[i].Text;
+                            string[] lsts = s.Split(new string[] { lst[j] }, StringSplitOptions.None);
+                            cell.Paragraphs[i].Text = "";
+                            cell.Paragraphs[i].AppendText(lsts[0]);
+                            if (strImg == "" || strImg == null)
+                            {
+                                if (lsts.Length != 1)
+                                    cell.Paragraphs[i].AppendText(lsts[1]);
+                            }
+                            else
+                            {
+                                Image img = ConvertStrBase64ToImage(strImg);
+                                IWPicture picture = cell.Paragraphs[i].AppendPicture(img);
+                                if (lsts.Length != 1)
+                                    cell.Paragraphs[i].AppendText(lsts[1]);
+                                if (tagStyle != "")
+                                {
+                                    string[] lstStyle = tagStyle.Split(';');
+                                    for (int a = 0, b = lstStyle.Length; a < b; a++)
+                                        SetStyle(picture, lstStyle[a]);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
         /// <summary>
         /// Delete All Itemplate in form
         /// </summary>
         private void DeleteItemplate()
         {
-            foreach (ITable table in lstTable)
+            foreach (ITableWord table in lstTable)
             {
                 int countR = table.CountRow - 1;
                 for (int i = countR; i > 0; i--)
                 {
-                    foreach (ITemplate iTemp in lstTemplate)
+                    foreach (ITemplateWord iTemp in lstTemplate)
                     {
                         if (iTemp.IndexTable == table.IndexTable && iTemp.IndexRow == i)
                         {
@@ -311,6 +431,21 @@ namespace OpenReport
                         }
                     }
                 }
+            }
+        }
+        private void SetStyle(IWPicture picture, string style)
+        {
+            string[] lstStyle = style.Split('-');
+            switch (lstStyle[0].ToLower())
+            {
+                case "w":
+                    picture.Width = float.Parse(lstStyle[1]);
+                    break;
+                case "h":
+                    picture.Height = float.Parse(lstStyle[1]);
+                    break;
+                default:
+                    break;
             }
         }
         private Image ConvertStrBase64ToImage(string base64String)
@@ -325,8 +460,25 @@ namespace OpenReport
             else
                 return null;
         }
-        #endregion
+
+        private Stream GetFileStreamFromUrl(string fileUrl)
+        {
+            try
+            {
+                byte[] imageData = null;
+
+                using (var wc = new System.Net.WebClient())
+                    imageData = wc.DownloadData(fileUrl);
+
+                return new MemoryStream(imageData);
+            }
+            catch (Exception)
+            {
+                return null;
+            }
+        }
     }
+        #endregion
     public enum TagWordType
     {
         Text,
